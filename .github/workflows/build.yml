@@ -156,6 +156,12 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p src/ios/Generated
+          # Per-source-tree compatibility fixes. The script is feature-gated and
+          # idempotent: it no-ops on a tree that legitimately lacks the feature,
+          # and reports ALREADY when it has been applied before.
+          if [ -f "$GITHUB_WORKSPACE/scripts/fix_sources.py" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/fix_sources.py" "$PWD"
+          fi
           set +e
           xcodebuild \
             -project src/ios/Minis.xcodeproj \
