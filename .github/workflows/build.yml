@@ -1,0 +1,205 @@
+name: Build Unsigned IPA
+
+# Build an unsigned iOS IPA from an OpenMinis-style source tree.
+# Source repo is supplied at dispatch time and masked in logs.
+on:
+  workflow_dispatch:
+    inputs:
+      src_repo:
+        description: 'source repo owner/name'
+        required: true
+      src_ref:
+        description: 'source ref (branch/tag/sha)'
+        required: true
+        default: 'main'
+      cache_key_extra:
+        description: 'extra cache key suffix (bump to force dep rebuild)'
+        required: false
+        default: 'v1'
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 355
+    env:
+      SRC_REPO: ${{ inputs.src_repo }}
+      SRC_REF: ${{ inputs.src_ref }}
+    steps:
+      - name: Mask source repo
+        run: |
+          echo "::add-mask::$SRC_REPO"
+          echo "::add-mask::$SRC_REF"
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcode-select -p
+          ls /Applications | grep -i '^Xcode' || true
+          sysctl -n hw.ncpu
+
+      - name: Fetch source
+        env:
+          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          code=$(curl -sS -o /tmp/src.tgz -w '%{http_code}' -L \
+            -H "Authorization: token $SRC_TOKEN" \
+            "https://api.github.com/repos/$SRC_REPO/tarball/$SRC_REF")
+          echo "fetch http=$code size=$(wc -c </tmp/src.tgz)"
+          [ "$code" = "200" ] || { head -c 300 /tmp/src.tgz; exit 1; }
+          tar xzf /tmp/src.tgz -C work --strip-components=1
+          ls -la work | head -30
+
+      - name: Restore native deps cache
+        id: depcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            work/deps/libs
+            work/deps/include
+            work/deps/frameworks
+            work/deps/resources
+            work/deps/lame-build
+            work/deps/build
+          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ github.run_id }}
+          restore-keys: |
+            openminis-deps-${{ inputs.cache_key_extra }}-
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          brew install ninja llvm libarchive pkg-config
+          python3 -m pip install --break-system-packages meson || python3 -m pip install meson
+          echo "$(brew --prefix)/opt/llvm/bin" >> "$GITHUB_PATH"
+          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/opt/libarchive/lib/pkgconfig" >> "$GITHUB_ENV"
+          (meson --version || python3 -m mesonbuild.mesonmain --version) 
+          ninja --version
+          which go || ls /usr/local/go/bin || true
+
+      - name: Build native deps
+        if: steps.depcache.outputs.cache-hit != 'true'
+        working-directory: work
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/go/bin:$PATH"
+          # tarball has no .git metadata -> neutralize build_ish.sh's submodule init
+          sed -i '' 's|git submodule update --init --recursive|echo "[ci] skip submodule init (tarball)"|' deps/build_ish.sh
+          grep -n 'skip submodule init' deps/build_ish.sh
+          go version
+          echo "########## 1/5 lame ##########"
+          ./deps/build_lame.sh
+          echo "########## 2/5 ffmpeg ##########"
+          ./deps/build_ffmpeg.sh
+          echo "########## 3/5 ish ##########"
+          ./deps/build_ish.sh
+          echo "########## 4/5 alpine rootfs ##########"
+          ./deps/prepare_alpine_rootfs.sh
+          echo "########## 5/5 rclone ##########"
+          ./deps/build_rclone_ios.sh
+          echo "########## deps done ##########"
+          du -sh deps/libs deps/frameworks deps/resources deps/include
+
+      - name: Save native deps cache
+        if: steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/deps/libs
+            work/deps/include
+            work/deps/frameworks
+            work/deps/resources
+            work/deps/lame-build
+            work/deps/build
+          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ github.run_id }}
+
+      - name: Sanity check deps
+        working-directory: work
+        run: |
+          set -euo pipefail
+          for f in deps/libs/libish.a deps/libs/libish_emu.a deps/libs/libfakefs.a; do
+            [ -f "$f" ] || { echo "MISSING $f"; ls -R deps/libs || true; exit 1; }
+          done
+          [ -d deps/frameworks/FFmpeg.framework ] || { echo "MISSING FFmpeg.framework"; ls deps/frameworks; exit 1; }
+          [ -d deps/frameworks/Rclone.xcframework ] || { echo "MISSING Rclone.xcframework"; ls deps/frameworks; exit 1; }
+          [ -f deps/resources/alpine-rootfs.zip ] || { echo "MISSING alpine-rootfs.zip"; ls deps/resources; exit 1; }
+          echo "all native deps present"
+
+      - name: Build app (unsigned archive)
+        working-directory: work
+        run: |
+          set -o pipefail
+          mkdir -p src/ios/Generated
+          set +e
+          xcodebuild \
+            -project src/ios/Minis.xcodeproj \
+            -scheme Minis \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Minis.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ENTITLEMENTS="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            archive > /tmp/xcode.log 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "=== BUILD FAILED rc=$rc ==="
+            grep -nE 'error:|Error:|failed|FAILED|fatal error' /tmp/xcode.log | tail -150 || true
+            echo "=== last 200 lines ==="
+            tail -200 /tmp/xcode.log
+            exit 1
+          fi
+          echo "=== archive ok ==="
+          tail -15 /tmp/xcode.log
+
+      - name: Package unsigned IPA
+        working-directory: work
+        run: |
+          set -euo pipefail
+          APP="$(find build/Minis.xcarchive/Products/Applications -maxdepth 1 -name '*.app' -type d | head -1)"
+          test -n "$APP"
+          echo "APP=$APP"
+          du -sh "$APP"
+          rm -rf out && mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          ( cd out && zip -qry Minis-unsigned.ipa Payload && zip -qr dSYMs.zip ../build/Minis.xcarchive/dSYMs 2>/dev/null || true )
+          rm -rf out/Payload
+          ls -lh out/
+          unzip -l out/Minis-unsigned.ipa | head -8
+          unzip -l out/Minis-unsigned.ipa | tail -3
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: minis-ipa
+          path: work/out/Minis-unsigned.ipa
+          retention-days: 5
+          if-no-files-found: error
+
+      - name: Upload dSYMs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minis-dsyms
+          path: work/out/dSYMs.zip
+          retention-days: 5
+          if-no-files-found: ignore
+
+      - name: Upload xcode log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-log
+          path: /tmp/xcode.log
+          retention-days: 5
+          if-no-files-found: ignore
