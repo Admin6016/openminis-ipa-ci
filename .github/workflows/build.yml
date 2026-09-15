@@ -78,16 +78,27 @@ jobs:
       - name: Install build tools
         run: |
           set -euo pipefail
-          brew install ninja llvm libarchive pkg-config
+          brew install ninja llvm lld libarchive pkg-config
           python3 -m pip install --break-system-packages meson || python3 -m pip install meson
-          echo "$(brew --prefix)/opt/llvm/bin" >> "$GITHUB_PATH"
+          LLVM_BIN="$(brew --prefix)/opt/llvm/bin"
+          echo "$LLVM_BIN" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=$(brew --prefix)/opt/libarchive/lib/pkgconfig" >> "$GITHUB_ENV"
           meson --version || python3 -m mesonbuild.mesonmain --version
           ninja --version
           command -v go && go version
-          command -v clang && clang --version | head -1
-          echo "LLVM clang: $(brew --prefix)/opt/llvm/bin/clang"
+          ls -l "$LLVM_BIN"/clang "$LLVM_BIN"/ld.lld 2>&1 || true
+          command -v ld.lld || ls -l "$(brew --prefix lld 2>/dev/null)/bin" 2>/dev/null || true
+          # clang -fuse-ld=lld needs ld.lld reachable; make sure it is
+          LLD_SRC="$(brew --prefix)/bin/ld.lld"
+          if [ -x "$LLD_SRC" ]; then
+            ln -sf "$LLD_SRC" "$LLVM_BIN/ld.lld"
+            echo "linked $LLD_SRC -> $LLVM_BIN/ld.lld"
+          else
+            echo "!! ld.lld missing"; brew list --versions lld || true
+            find "$(brew --prefix)" -maxdepth 4 -name 'ld.lld' 2>/dev/null || true
+          fi
+          env -u SDKROOT -u IPHONEOS_DEPLOYMENT_TARGET "$LLVM_BIN/clang" -target aarch64-linux-gnu -fuse-ld=lld -nostdlib -shared -x c /dev/null -o /tmp/_probe.so && echo "VDSO linker probe OK" || { echo "VDSO linker probe FAILED"; exit 1; }
           ls -l "$(brew --prefix)/opt/libarchive/lib/libarchive.dylib" || true
 
       - name: Build native deps
