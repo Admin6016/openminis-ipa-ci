@@ -71,6 +71,10 @@ jobs:
           restore-keys: |
             openminis-deps-${{ inputs.cache_key_extra }}-
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
       - name: Install build tools
         run: |
           set -euo pipefail
@@ -79,20 +83,25 @@ jobs:
           echo "$(brew --prefix)/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=$(brew --prefix)/opt/libarchive/lib/pkgconfig" >> "$GITHUB_ENV"
-          (meson --version || python3 -m mesonbuild.mesonmain --version) 
+          meson --version || python3 -m mesonbuild.mesonmain --version
           ninja --version
-          which go || ls /usr/local/go/bin || true
+          command -v go && go version
+          command -v clang && clang --version | head -1
+          echo "LLVM clang: $(brew --prefix)/opt/llvm/bin/clang"
+          ls -l "$(brew --prefix)/opt/libarchive/lib/libarchive.dylib" || true
 
       - name: Build native deps
         if: steps.depcache.outputs.cache-hit != 'true'
         working-directory: work
         run: |
           set -euo pipefail
-          export PATH="/usr/local/go/bin:$PATH"
+          export PATH="$(brew --prefix)/opt/llvm/bin:$(python3 -m site --user-base)/bin:$PATH"
           # tarball has no .git metadata -> neutralize build_ish.sh's submodule init
           sed -i '' 's|git submodule update --init --recursive|echo "[ci] skip submodule init (tarball)"|' deps/build_ish.sh
+          # modern clang rejects bitcode flags; strip them from the vendored scripts
+          sed -i '' 's| -fembed-bitcode||g' deps/build_lame.sh deps/build_ffmpeg.sh
           grep -n 'skip submodule init' deps/build_ish.sh
-          go version
+          grep -c 'fembed-bitcode' deps/build_lame.sh deps/build_ffmpeg.sh || true
           echo "########## 1/5 lame ##########"
           ./deps/build_lame.sh
           echo "########## 2/5 ffmpeg ##########"
