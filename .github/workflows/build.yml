@@ -16,6 +16,10 @@ on:
         description: 'extra cache key suffix (bump to force dep rebuild)'
         required: false
         default: 'v1'
+      enhanced_entitlements:
+        description: 'TrollStore only: add filesystem-escaping private entitlements (enables the ios_fs tool). Default no.'
+        required: false
+        default: 'no'
 
 permissions:
   contents: read
@@ -203,6 +207,22 @@ jobs:
             fi
           fi
 
+          # [ci-fix-hostfs] Capability detection + the real-filesystem tool.
+          if [ -f "$GITHUB_WORKSPACE/sources/HostCapabilities.swift" ]; then
+            echo "########## install: HostCapabilities.swift ##########"
+            cp "$GITHUB_WORKSPACE/sources/HostCapabilities.swift" \
+               src/ios/Agent/Chat/HostCapabilities.swift
+            python3 "$GITHUB_WORKSPACE/scripts/add_source_file.py" "$PWD" \
+              HostCapabilities.swift "AIChatViewModel+Fallback.swift" || true
+          fi
+          if [ -f "$GITHUB_WORKSPACE/sources/HostFileSystemTool.swift" ]; then
+            echo "########## install: HostFileSystemTool.swift ##########"
+            cp "$GITHUB_WORKSPACE/sources/HostFileSystemTool.swift" \
+               src/ios/Agent/Chat/HostFileSystemTool.swift
+            python3 "$GITHUB_WORKSPACE/scripts/add_source_file.py" "$PWD" \
+              HostFileSystemTool.swift "AIChatViewModel+Fallback.swift" || true
+          fi
+
           # [ci-fix-panel] Install the aggregate sub-agent panel view, then let
           # the patch loop register it in the Xcode project (src/ios uses
           # explicit PBXFileReference entries, so a dropped-in file is not
@@ -220,7 +240,7 @@ jobs:
           # Each script is feature-gated and idempotent: it no-ops on a tree
           # that legitimately lacks the feature and reports ALREADY when it has
           # been applied before, so this step is safe on any source tree.
-          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_panel_collapse fix_agent_introspection fix_auto_continue fix_settings_extras; do
+          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_panel_collapse fix_agent_introspection fix_host_filesystem fix_auto_continue fix_settings_extras; do
             if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
               echo "########## patch: $s ##########"
               python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
@@ -276,6 +296,19 @@ jobs:
           fi
           echo "=== archive ok ==="
           tail -15 /tmp/xcode.log
+
+      - name: Apply enhanced entitlements (opt-in)
+        if: inputs.enhanced_entitlements == 'yes'
+        working-directory: work
+        run: |
+          set -euo pipefail
+          # Private entitlements. Effective only through TrollStore / a
+          # jailbreak; they are what makes the capability-gated ios_fs tool
+          # appear, because registration keys off the signature's entitlements.
+          bash "$GITHUB_WORKSPACE/scripts/apply_enhanced_entitlements.sh" \
+            src/ios/Minis.entitlements
+          echo "--- resulting capability set ---"
+          python3 -c "import plistlib;print('\n'.join(sorted(plistlib.load(open('src/ios/Minis.entitlements','rb')).keys())))"
 
       - name: Package + ad-hoc sign IPA
         working-directory: work
