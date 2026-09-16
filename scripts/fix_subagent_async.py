@@ -327,14 +327,28 @@ extension AIChatViewModel {
             agentHistory[idx].dbMessageId = pid
         }
 
+        // Mirror the send()/resume() path's ownership rules. The loop must run
+        // inside a Task (calling it inline would block the detached fan-out task
+        // that awaits this handler), and the flag teardown must respect the
+        // established convention that a SUPERSEDED task — one the user has
+        // replaced by tapping send or Stop — must not flip `isProcessing`, or it
+        // clears the flag out from under the new turn that now owns it.
         guard !isProcessing else {
             saLogger.info("[SubAgent] a turn is already running — summary appended to history")
             return
         }
-        do {
-            try await runAgentLoop()
-        } catch {
-            ctLogger.error("[SubAgent] restart after fan-out failed: \(error.localizedDescription)")
+        isProcessing = true
+        currentTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                // Only the task that still owns the flag may clear it.
+                if !Task.isCancelled { self.isProcessing = false }
+            }
+            do {
+                try await self.runAgentLoop()
+            } catch {
+                ctLogger.error("[SubAgent] restart after fan-out failed: \(error.localizedDescription)")
+            }
         }
     }
 }
