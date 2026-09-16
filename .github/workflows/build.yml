@@ -86,7 +86,11 @@ jobs:
             work/deps/resources
             work/deps/lame-build
             work/deps/build
-          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ github.run_id }}
+          # Keyed on what the artifacts DEPEND on (the extra tag and the source
+          # ref), NOT on github.run_id. Including run_id minted a fresh key every
+          # run, so the cache never hit and every build recompiled the native deps
+          # from scratch. Bump cache_key_extra to force a rebuild.
+          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ inputs.src_repo }}-${{ inputs.src_ref }}
           restore-keys: |
             openminis-deps-${{ inputs.cache_key_extra }}-
 
@@ -156,7 +160,11 @@ jobs:
             work/deps/resources
             work/deps/lame-build
             work/deps/build
-          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ github.run_id }}
+          # Keyed on what the artifacts DEPEND on (the extra tag and the source
+          # ref), NOT on github.run_id. Including run_id minted a fresh key every
+          # run, so the cache never hit and every build recompiled the native deps
+          # from scratch. Bump cache_key_extra to force a rebuild.
+          key: openminis-deps-${{ inputs.cache_key_extra }}-${{ inputs.src_repo }}-${{ inputs.src_ref }}
 
       - name: Sanity check deps
         working-directory: work
