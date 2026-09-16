@@ -181,6 +181,18 @@ jobs:
           if [ -f "$GITHUB_WORKSPACE/scripts/fix_sources.py" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/fix_sources.py" "$PWD"
           fi
+
+          # BUILDING.md: build-time customization values are injected from a
+          # file that is deliberately not committed. An empty value is a valid
+          # configuration (it only disables the Claude-OAuth sign-in path), but
+          # the xcconfig must still EXIST or the base-configuration reference
+          # fails the archive outright.
+          if [ -f src/ios/Configs/ProviderCustomization.xcconfig.example ] \
+             && [ ! -f src/ios/Configs/ProviderCustomization.xcconfig ]; then
+            cp src/ios/Configs/ProviderCustomization.xcconfig.example \
+               src/ios/Configs/ProviderCustomization.xcconfig
+            echo "created ProviderCustomization.xcconfig from .example"
+          fi
           set +e
           xcodebuild \
             -project src/ios/Minis.xcodeproj \
