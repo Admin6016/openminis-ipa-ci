@@ -194,6 +194,15 @@ jobs:
             echo "created ProviderCustomization.xcconfig from .example"
           fi
           set +e
+          # Archive with signing fully disabled: no team, no provisioning
+          # profile, no keychain identity is available on the runner. The
+          # capability entitlements are applied afterwards by
+          # scripts/sign_adhoc.sh, which is the step that actually matters —
+          # see the comment there for why an entitlement-free binary crashes.
+          #
+          # NOTE: do NOT pass CODE_SIGN_ENTITLEMENTS="" here. That override
+          # would both strip the capability set from the archive and hide the
+          # fact that we rely on the entitlements files in src/ios/.
           xcodebuild \
             -project src/ios/Minis.xcodeproj \
             -scheme Minis \
@@ -203,7 +212,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_ENTITLEMENTS="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
             archive > /tmp/xcode.log 2>&1
@@ -219,7 +227,7 @@ jobs:
           echo "=== archive ok ==="
           tail -15 /tmp/xcode.log
 
-      - name: Package unsigned IPA
+      - name: Package + ad-hoc sign IPA
         working-directory: work
         run: |
           set -euo pipefail
@@ -227,13 +235,37 @@ jobs:
           test -n "$APP"
           echo "APP=$APP"
           du -sh "$APP"
+
+          # Ad-hoc sign with the capability entitlements (App Group, HealthKit,
+          # iCloud, ...). TrollStore reads these back when it re-signs on
+          # install, so this is what makes App Groups usable on-device.
+          bash "$GITHUB_WORKSPACE/scripts/sign_adhoc.sh" "$APP" "src/ios"
+
           rm -rf out && mkdir -p out/Payload
           cp -R "$APP" out/Payload/
-          ( cd out && zip -qry Minis-unsigned.ipa Payload && zip -qr dSYMs.zip ../build/Minis.xcarchive/dSYMs 2>/dev/null || true )
+          ( cd out && zip -qry Minis-unsigned.ipa Payload )
+          ( cd out && zip -qr dSYMs.zip ../build/Minis.xcarchive/dSYMs 2>/dev/null || true )
           rm -rf out/Payload
           ls -lh out/
-          unzip -l out/Minis-unsigned.ipa | head -8
-          unzip -l out/Minis-unsigned.ipa | tail -3
+          unzip -l out/Minis-unsigned.ipa | head -6
+
+      - name: Verify IPA payload retains signature + entitlements
+        working-directory: work
+        run: |
+          set -euo pipefail
+          rm -rf verify && mkdir -p verify
+          unzip -q out/Minis-unsigned.ipa -d verify
+          VAPP="verify/Payload/Minis.app"
+          # Re-verify on the exact bytes a device will install.
+          codesign -dv "$VAPP"
+          echo "--- entitlements in the packaged app ---"
+          codesign -d --entitlements - --xml "$VAPP" \
+            | python3 -c 'import sys,plistlib;d=plistlib.loads(sys.stdin.buffer.read());print("\n".join(f"  {k} = {v}" for k,v in sorted(d.items())))'
+          codesign -d --entitlements - --xml "$VAPP" \
+            | grep -q 'group.com.openminis.app' \
+            || { echo "!! App Group entitlement lost in packaging"; exit 1; }
+          echo "OK: packaged app carries group.com.openminis.app"
+          rm -rf verify
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
