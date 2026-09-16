@@ -64,7 +64,7 @@ def patch(name, path, old, new, count, probe):
 
 patch('VM: stored properties', VM,
 '    @Published var parallelAgentsEnabled = true\n',
-'    @Published var parallelAgentsEnabled = true\n\n    // MARK: - Auto-Continue ("Keep Going") — [T-auto-continue]\n    //\n    // An opt-in, per-session mode: when the agent stops and parks on the\n    // Resume banner, re-send a user-authored continuation prompt automatically\n    // and keep working until the goal is done or the user turns it off.\n    //\n    // The mechanism hangs off `canResume` — the app\'s single chokepoint for\n    // "stopped, waiting for the user". A normally-completed turn never sets\n    // canResume, so this fires on a genuine interruption only, not after every\n    // finished reply. See AutoContinue.swift.\n\n    /// This session\'s persisted auto-continue settings.\n    @Published var autoContinueConfig: AutoContinueConfig = .disabled\n\n    /// Pending countdown to the next automatic continuation, if armed.\n    /// Not `@Published`: it is machinery; the UI reads the storage below.\n    var autoContinueCountdownTask: Task<Void, Never>?\n\n    /// Seconds left on the countdown; 0 when idle.\n    @Published var autoContinueCountdownStorage: Int = 0\n\n    /// How many times this session has auto-continued. Shown in the settings\n    /// sheet so the user can confirm the mode is working (and notice if it is\n    /// working more than they expected).\n    @Published var autoContinueFiredCount: Int = 0\n', 1, '// MARK: - Auto-Continue')
+'    @Published var parallelAgentsEnabled = true\n\n    // MARK: - Auto-Continue ("Keep Going") — [T-auto-continue]\n    //\n    // An opt-in, per-session mode: when the agent stops and parks on the\n    // Resume banner, re-send a user-authored continuation prompt automatically\n    // and keep working until the goal is done or the user turns it off.\n    //\n    // The mechanism hangs off `canResume` — the app\'s single chokepoint for\n    // "stopped, waiting for the user". A normally-completed turn never sets\n    // canResume, so this fires on a genuine interruption only, not after every\n    // finished reply. See AutoContinue.swift.\n\n    /// This session\'s persisted auto-continue settings.\n    @Published var autoContinueConfig: AutoContinueConfig = .disabled\n\n    /// Pending countdown to the next automatic continuation, if armed.\n    /// Not `@Published`: it is machinery; the UI reads the storage below.\n    var autoContinueCountdownTask: Task<Void, Never>?\n\n    /// Seconds left on the countdown; 0 when idle.\n    @Published var autoContinueCountdownStorage: Int = 0\n\n    /// How many times this session has auto-continued. Shown in the settings\n    /// sheet so the user can confirm the mode is working (and notice if it is\n    /// working more than they expected).\n    @Published var autoContinueFiredCount: Int = 0\n\n    /// True while `fireAutoContinue` is driving a send, so the user-input\n    /// reset hook can distinguish the mode own sends from real user input.\n    var isAutoContinueSending: Bool = false\n', 1, '// MARK: - Auto-Continue')
 
 patch('VM: canResume didSet hook', VM,
 '    var isRedetectingInterruptedTail = false\n\n    @Published var canResume = false {\n        didSet {',
@@ -90,6 +90,18 @@ patch('VM: isProcessing falling-edge hook', VM,
 patch('VM: sessionId didSet hook', VM,
 '    var sessionId: String? {\n        didSet { browserTabPool.sessionId = sessionId }\n    }',
 '    var sessionId: String? {\n        didSet {\n            browserTabPool.sessionId = sessionId\n            // [T-auto-continue] The mode is per-session; swap it in when the\n            // bound session changes (different chat, or a new draft).\n            if oldValue != sessionId {\n                loadAutoContinueConfig()\n            }\n        }\n    }', 1, 'loadAutoContinueConfig()')
+
+# A user-authored send means a new goal, so the consecutive-continuation
+# counter restarts. The callee ignores the mode own sends.
+patch('VM: user-send resets counter', VM,
+    '        guard !text.isEmpty || !pendingAttachments.isEmpty, !isProcessing else {',
+    '\n'.join([
+        '        // [T-auto-continue] A real user send starts a fresh goal, so the',
+        '        // consecutive-continuation counter resets. The mode own sends',
+        '        // are excluded inside the callee.',
+        '        autoContinueNoteUserInput()',
+        '        guard !text.isEmpty || !pendingAttachments.isEmpty, !isProcessing else {',
+    ]), 1, 'autoContinueNoteUserInput()')
 
 patch('VM: cancel() disarms', VM,
 'func cancel() {\n        let lastBlocks = (messages.last?.role == .assistant)',
