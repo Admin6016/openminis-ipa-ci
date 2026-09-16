@@ -176,16 +176,6 @@ jobs:
           set -euo pipefail
           mkdir -p src/ios/Generated
 
-          # Each script is feature-gated and idempotent: it no-ops on a tree
-          # that legitimately lacks the feature and reports ALREADY when it has
-          # been applied before, so this step is safe on any source tree.
-          for s in fix_sources fix_headless_stream fix_subagent_async fix_auto_continue; do
-            if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
-              echo "########## patch: $s ##########"
-              python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
-            fi
-          done
-
           # [T-auto-continue] Install the new feature file, then register it in
           # the Xcode project. Minis uses explicit PBXFileReference entries (not
           # a synchronized group) for src/ios/Agent/**, so a dropped-in .swift
@@ -204,6 +194,30 @@ jobs:
                 AutoContinue.swift "AIChatViewModel+Fallback.swift"
             fi
           fi
+
+          # [ci-fix-panel] Install the aggregate sub-agent panel view, then let
+          # the patch loop register it in the Xcode project (src/ios uses
+          # explicit PBXFileReference entries, so a dropped-in file is not
+          # compiled until it is listed).
+          if [ -f "$GITHUB_WORKSPACE/sources/SubAgentPanel.swift" ]; then
+            echo "########## install: SubAgentPanel.swift ##########"
+            cp "$GITHUB_WORKSPACE/sources/SubAgentPanel.swift" \
+               src/ios/Views/Chat/SubAgentPanel.swift
+            if [ -f "$GITHUB_WORKSPACE/scripts/add_source_file.py" ]; then
+              python3 "$GITHUB_WORKSPACE/scripts/add_source_file.py" "$PWD" \
+                SubAgentPanel.swift "ToolLiveSheet.swift"
+            fi
+          fi
+
+          # Each script is feature-gated and idempotent: it no-ops on a tree
+          # that legitimately lacks the feature and reports ALREADY when it has
+          # been applied before, so this step is safe on any source tree.
+          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_auto_continue; do
+            if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
+              echo "########## patch: $s ##########"
+              python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
+            fi
+          done
 
           # BUILDING.md: build-time customization values are injected from a
           # file that is deliberately not committed. An empty value is a valid
