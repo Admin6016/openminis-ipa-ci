@@ -212,7 +212,7 @@ jobs:
           # Each script is feature-gated and idempotent: it no-ops on a tree
           # that legitimately lacks the feature and reports ALREADY when it has
           # been applied before, so this step is safe on any source tree.
-          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_auto_continue; do
+          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_panel_collapse fix_agent_introspection fix_auto_continue fix_settings_extras; do
             if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
               echo "########## patch: $s ##########"
               python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
