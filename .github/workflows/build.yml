@@ -33,6 +33,9 @@ jobs:
           echo "::add-mask::$SRC_REPO"
           echo "::add-mask::$SRC_REF"
 
+      - name: Checkout pipeline scripts
+        uses: actions/checkout@v4
+
       - name: Toolchain info
         run: |
           sw_vers
@@ -55,6 +58,22 @@ jobs:
           [ "$code" = "200" ] || { head -c 300 /tmp/src.tgz; exit 1; }
           tar xzf /tmp/src.tgz -C work --strip-components=1
           ls -la work | head -30
+
+          # A GitHub tarball cannot carry git submodules (they arrive as empty
+          # directories). Detect that and fall back to a shallow, recursive
+          # clone, which is the only thing that can materialize them.
+          if [ -d work/deps/ish ] && [ -f work/deps/ish/meson.build ]; then
+            echo "deps/ish is in-tree — tarball is sufficient"
+          else
+            echo "deps/ish is a submodule (empty from tarball) — re-fetching via git clone"
+            rm -rf work && mkdir -p work
+            git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SRC_TOKEN" | base64)" \
+              clone --depth 1 --branch "$SRC_REF" --recurse-submodules --shallow-submodules \
+              "https://github.com/$SRC_REPO.git" work
+            rm -rf work/.git
+            ls work/deps/ish/meson.build
+            echo "recursive clone ok"
+          fi
 
       - name: Restore native deps cache
         id: depcache
