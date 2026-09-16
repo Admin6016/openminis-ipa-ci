@@ -78,24 +78,49 @@ anchor_fileref_id = re.match(r"\n\t\t(" + OBJID + r")", fm.group(0)).group(1)
 anchor_buildfile_id = re.match(r"\n\t\t(" + OBJID + r")", bm.group(0)).group(1)
 
 # ---------------------------------------------------------------------------
-# Generate fresh, collision-free 24-hex ids. 'AC' + a counter keeps them
-# visually distinct from Xcode's own ids so a human can spot our insertions.
+# Generate fresh, collision-free ids.
+#
+# BUG (fixed here): the collision check below used to scan for 24-hex ids while
+# PRODUCING 15-character ones ("AC%013X"), so it could never see its own
+# output. Every run therefore restarted at seed 1 and handed out
+# AC0000000000001 / ...002 again. Registering a SECOND file in the same project
+# produced DUPLICATE PBXFileReference ids, which corrupts the pbxproj — the
+# duplicate's source file then silently never compiles, surfacing much later as
+# "cannot find X in scope" for every symbol that file declares.
+#
+# Two changes make it correct:
+#   1. collect EVERY object id in the file, at whatever width the project uses
+#      (this project mixes 8/9/10/11/15/24/25 characters), not one fixed width;
+#   2. seed the counter PAST the highest existing 'AC' id, so a second
+#      invocation continues the sequence instead of colliding with the first.
 # ---------------------------------------------------------------------------
-existing_ids = set(re.findall(r"\b[A-F0-9]{24}\b", src))
+existing_ids = set(re.findall(r"\b([0-9A-Za-z]+) /\*", src))
+existing_ids |= set(re.findall(r"\b([0-9A-Za-z]{8,})\b", src))
+
+_AC_RE = re.compile(r"\bAC([0-9A-Fa-f]{13})\b")
 
 
-def fresh_id(seed: int) -> str:
-    cand = ("AC%013X" % seed)     # 15 chars, matches this project's id width
-    seed += 1
-    while cand in existing_ids:
-        cand = ("AC%013X" % seed)
-        seed += 1
-    existing_ids.add(cand)
-    return cand
+def _next_seed() -> int:
+    """One past the largest existing AC-id, so repeated runs never collide."""
+    used = [int(m, 16) for m in _AC_RE.findall(src)]
+    return (max(used) + 1) if used else 1
 
 
-new_fileref_id = fresh_id(1)
-new_buildfile_id = fresh_id(2)
+_next = _next_seed()
+
+
+def fresh_id() -> str:
+    global _next
+    while True:
+        cand = "AC%013X" % _next
+        _next += 1
+        if cand not in existing_ids:
+            existing_ids.add(cand)
+            return cand
+
+
+new_fileref_id = fresh_id()
+new_buildfile_id = fresh_id()
 print(f"[INFO  ] new ids: fileRef={new_fileref_id} buildFile={new_buildfile_id}")
 
 # ---------------------------------------------------------------------------
