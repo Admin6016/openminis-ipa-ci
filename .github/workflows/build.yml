@@ -170,17 +170,21 @@ jobs:
           [ -f deps/resources/alpine-rootfs.zip ] || { echo "MISSING alpine-rootfs.zip"; ls deps/resources; exit 1; }
           echo "all native deps present"
 
-      - name: Build app (unsigned archive)
+      - name: Apply source patches
         working-directory: work
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p src/ios/Generated
-          # Per-source-tree compatibility fixes. The script is feature-gated and
-          # idempotent: it no-ops on a tree that legitimately lacks the feature,
-          # and reports ALREADY when it has been applied before.
-          if [ -f "$GITHUB_WORKSPACE/scripts/fix_sources.py" ]; then
-            python3 "$GITHUB_WORKSPACE/scripts/fix_sources.py" "$PWD"
-          fi
+
+          # Each script is feature-gated and idempotent: it no-ops on a tree
+          # that legitimately lacks the feature and reports ALREADY when it has
+          # been applied before, so this step is safe on any source tree.
+          for s in fix_sources fix_headless_stream; do
+            if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
+              echo "########## patch: $s ##########"
+              python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
+            fi
+          done
 
           # BUILDING.md: build-time customization values are injected from a
           # file that is deliberately not committed. An empty value is a valid
@@ -193,6 +197,11 @@ jobs:
                src/ios/Configs/ProviderCustomization.xcconfig
             echo "created ProviderCustomization.xcconfig from .example"
           fi
+
+      - name: Build app (unsigned archive)
+        working-directory: work
+        run: |
+          set -o pipefail
           set +e
           # Archive with signing fully disabled: no team, no provisioning
           # profile, no keychain identity is available on the runner. The
