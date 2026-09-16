@@ -179,12 +179,31 @@ jobs:
           # Each script is feature-gated and idempotent: it no-ops on a tree
           # that legitimately lacks the feature and reports ALREADY when it has
           # been applied before, so this step is safe on any source tree.
-          for s in fix_sources fix_headless_stream; do
+          for s in fix_sources fix_headless_stream fix_subagent_async; do
             if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
               echo "########## patch: $s ##########"
               python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"
             fi
           done
+
+          # [T-auto-continue] Install the new feature file, then register it in
+          # the Xcode project. Minis uses explicit PBXFileReference entries (not
+          # a synchronized group) for src/ios/Agent/**, so a dropped-in .swift
+          # is not compiled until it is listed in the Sources phase.
+          #
+          # The file lives in this pipeline repo rather than the source repo:
+          # the source repo is the user's own fork and should not be forked
+          # further by build tooling. The copy is unconditional (it is our
+          # file), but the registration is skipped if it is already present.
+          if [ -f "$GITHUB_WORKSPACE/sources/AutoContinue.swift" ]; then
+            echo "########## install: AutoContinue.swift ##########"
+            cp "$GITHUB_WORKSPACE/sources/AutoContinue.swift" \
+               src/ios/Agent/Chat/AutoContinue.swift
+            if [ -f "$GITHUB_WORKSPACE/scripts/add_source_file.py" ]; then
+              python3 "$GITHUB_WORKSPACE/scripts/add_source_file.py" "$PWD" \
+                AutoContinue.swift "AIChatViewModel+Fallback.swift"
+            fi
+          fi
 
           # BUILDING.md: build-time customization values are injected from a
           # file that is deliberately not committed. An empty value is a valid
