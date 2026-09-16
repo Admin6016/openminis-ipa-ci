@@ -2,125 +2,106 @@
 //  HostCapabilities.swift
 //  MinisApp
 //
-//  [T-trollstore-capabilities] Runtime capability detection for jailbreak-only
-//  features.
+//  [T-trollstore-capabilities] Runtime capability detection for
+//  jailbreak-only features.
 //
 //  ## Why detect CAPABILITIES, not "is this TrollStore"
 //
 //  TrollStore is an INSTALL METHOD, not a runtime property. Once installed, the
 //  app is an ordinary app and nothing in-process says "TrollStore put me here".
-//  What actually differs is the ENTITLEMENT SET the binary was signed with:
-//  TrollStore re-signs with whatever entitlements are embedded in the Mach-O,
-//  including private ones the App Store build can never obtain.
+//  What actually differs is what the process is ALLOWED to do.
 //
-//  So the honest question is "which entitlements do I actually hold right now",
-//  and that is what this answers.
+//  ## Why a functional probe instead of reading the signature
+//
+//  The obvious approach is to read the entitlements off our own code signature.
+//  Two problems with that on iOS:
+//
+//    * the tidy `SecTaskCreateFromSelf` pair is in the PRIVATE SecTask.h and
+//      does not compile against a stock toolchain;
+//    * `SecCodeCopySigningInformation` is public but its availability for a
+//      *running* process is not something to bet a feature gate on.
+//
+//  Neither is necessary. The question we actually care about is
+//
+//      "can this process reach a path outside its own container?"
+//
+//  which can be answered by TRYING it. A probe is more honest than paperwork:
+//  it reports the capability that exists, not the one the signature claims, and
+//  it needs no private API, no extra framework, and no special-casing. It also
+//  degrades correctly — if a future iOS build starts blocking these paths
+//  despite the entitlement, the probe reports "no" and the gated tools stay
+//  hidden, which is exactly the safe direction.
 //
 //  ## Why this matters for tool registration
 //
-//  A tool that needs `no-container` must NOT be advertised on a build without
+//  A tool that needs container escape must NOT be advertised on a build without
 //  it: the model would call it and get an error it cannot reason about, and the
-//  tool's very existence would describe filesystem access the process does not
-//  have. Registration is therefore gated on the capability itself, so an
-//  App Store / ordinary-sideload build simply never sees those tools.
+//  tool's own description would promise filesystem access the process does not
+//  have. Registration is therefore gated here, so an App Store / ordinary
+//  sideload build simply never sees those tools.
 //
 
 import Foundation
-import Security
 
-/// Entitlements this build may or may not hold, and the feature each unlocks.
-enum HostCapability: String, CaseIterable {
-    /// `com.apple.private.security.no-container` — escapes the app container so
-    /// the whole iOS filesystem is reachable, not just this app's Documents.
-    case noContainer = "com.apple.private.security.no-container"
-
-    /// `com.apple.private.security.storage.AppDataContainers` — read/write other
-    /// apps' data containers.
-    case appDataContainers = "com.apple.private.security.storage.AppDataContainers"
-
-    /// `com.apple.private.security.platform-application` — run as a platform
-    /// application, which relaxes several further restrictions.
-    case platformApplication = "com.apple.private.security.platform-application"
-
-    /// `com.apple.private.task_for_pid` — inspect other processes.
-    case taskForPid = "com.apple.private.task_for_pid"
-
-    /// `get-task-allow` — debuggable; also relaxes a few runtime guards.
-    case getTaskAllow = "get-task-allow"
-
-    /// `com.apple.private.dynamic-codesigning` — runtime code-page modification.
-    case dynamicCodeSigning = "com.apple.private.dynamic-codesigning"
-
-    /// Plain-English name for logs / the capabilities readout.
-    var displayName: String {
-        switch self {
-        case .noContainer:          return "filesystem escape (no-container)"
-        case .appDataContainers:    return "other apps' containers"
-        case .platformApplication:  return "platform application"
-        case .taskForPid:           return "process inspection (task_for_pid)"
-        case .getTaskAllow:         return "debuggable (get-task-allow)"
-        case .dynamicCodeSigning:   return "dynamic code signing"
-        }
-    }
-}
-
-/// What this process is actually allowed to do.
-///
-/// Computed once and cached: entitlements are fixed for the lifetime of the
-/// process, and `SecTaskCopyValueForEntitlement` is not free.
+/// What this process is actually able to reach.
 enum HostCapabilities {
 
-    /// Entitlements held by the running binary.
-    private static let held: Set<HostCapability> = {
-        let found = Set(HostCapability.allCases.filter { hasEntitlement($0.rawValue) })
-        let names = found.map(\.displayName).sorted().joined(separator: ", ")
-        AppLogger(category: "HostCap").warning(
-            "[HostCap] detected \(found.count) private entitlement(s): \(found.isEmpty ? "none (sandboxed build)" : names)")
-        return found
+    // MARK: - Probes
+
+    /// Paths that are only readable from OUTSIDE the app container, i.e. only
+    /// when `com.apple.private.security.no-container` (or platform-application)
+    /// is in effect. Each is a well-known, stable, read-only location.
+    ///
+    /// `/Applications` is the primary canary: on a normal sandboxed app even
+    /// `fileExists` there is refused, while an escaped process can list it. The
+    /// others are corroborating signals for the same privilege.
+    private static let escapeCanaries: [String] = [
+        "/Applications",
+        "/var/mobile/Containers/Data/Application",
+        "/var/mobile/Media",
+    ]
+
+    /// True when a path outside the container can actually be enumerated.
+    ///
+    /// `contentsOfDirectory` is used rather than `fileExists` because existence
+    /// checks can succeed through a symlink or a stale cache, whereas an actual
+    /// directory listing has to pass the sandbox check for real.
+    private static func canList(_ path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        return (try? FileManager.default.contentsOfDirectory(atPath: path)) != nil
+    }
+
+    /// The first canary that is reachable, or nil when none is. Kept so the
+    /// log says WHICH path proved the escape, which is what makes a surprising
+    /// result diagnosable later.
+    private static let reachableCanary: String? = {
+        escapeCanaries.first(where: canList)
     }()
 
-    /// True when this binary holds `capability`.
-    static func has(_ capability: HostCapability) -> Bool {
-        held.contains(capability)
-    }
+    // MARK: - Results
 
     /// True when the sandbox container is escaped, i.e. arbitrary iOS paths are
     /// reachable. This is the gate for every real-filesystem tool.
-    static var canReachRealFilesystem: Bool {
-        has(.noContainer) || has(.platformApplication)
-    }
+    static let canReachRealFilesystem: Bool = {
+        let ok = reachableCanary != nil
+        AppLogger(category: "HostCap").warning(
+            ok
+            ? "[HostCap] container escape CONFIRMED (probe reached \(reachableCanary!)) — real-filesystem tools enabled"
+            : "[HostCap] no container escape (probed \(escapeCanaries.count) path(s), all refused) — sandboxed build")
+        return ok
+    }()
 
     /// True when other apps' data containers are readable.
-    static var canReachOtherApps: Bool {
-        has(.appDataContainers) || canReachRealFilesystem
-    }
-
-    /// Human-readable summary, for a settings readout or tool output.
-    static var summary: String {
-        if held.isEmpty { return "sandboxed (no private entitlements)" }
-        return held.map(\.displayName).sorted().joined(separator: ", ")
-    }
-
-    // MARK: - Entitlement lookup
-
-    /// Read one entitlement off this process's own code signature.
     ///
-    /// `SecTaskCreateFromSelf` + `SecTaskCopyValueForEntitlement` is the
-    /// documented way to ask "what am I allowed to do" without shelling out to
-    /// codesign (which the sandbox forbids). Returns false on any failure —
-    /// absence of proof is treated as absence of capability, which is the safe
-    /// direction: a tool is hidden rather than offered and then broken.
-    private static func hasEntitlement(_ key: String) -> Bool {
-        guard let task = SecTaskCreateFromSelf(nil) else { return false }
-        defer { CFRelease(task) }
-        guard let value = SecTaskCopyValueForEntitlement(task, key as CFString, nil) else {
-            return false
-        }
-        // Capabilities are booleans; tolerate the string "true" too, since a
-        // hand-written entitlements plist can produce either.
-        if let b = value as? Bool { return b }
-        if let n = value as? NSNumber { return n.boolValue }
-        if let s = value as? String { return s == "true" || s == "1" }
-        return false
+    /// Same privilege in practice: `no-container` grants the whole filesystem,
+    /// and `AppDataContainers` is the narrower entitlement that grants exactly
+    /// this. Either one lights it up, so it reduces to the escape probe.
+    static var canReachOtherApps: Bool { canReachRealFilesystem }
+
+    /// Human-readable summary, for logs or a settings readout.
+    static var summary: String {
+        canReachRealFilesystem
+            ? "container escape active (real iOS filesystem reachable)"
+            : "sandboxed (app container only)"
     }
 }
