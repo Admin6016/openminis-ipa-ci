@@ -223,24 +223,10 @@ jobs:
               HostFileSystemTool.swift "AIChatViewModel+Fallback.swift" || true
           fi
 
-          # [ci-fix-panel] Install the aggregate sub-agent panel view, then let
-          # the patch loop register it in the Xcode project (src/ios uses
-          # explicit PBXFileReference entries, so a dropped-in file is not
-          # compiled until it is listed).
-          if [ -f "$GITHUB_WORKSPACE/sources/SubAgentPanel.swift" ]; then
-            echo "########## install: SubAgentPanel.swift ##########"
-            cp "$GITHUB_WORKSPACE/sources/SubAgentPanel.swift" \
-               src/ios/Views/Chat/SubAgentPanel.swift
-            if [ -f "$GITHUB_WORKSPACE/scripts/add_source_file.py" ]; then
-              python3 "$GITHUB_WORKSPACE/scripts/add_source_file.py" "$PWD" \
-                SubAgentPanel.swift "ToolLiveSheet.swift"
-            fi
-          fi
-
           # Each script is feature-gated and idempotent: it no-ops on a tree
           # that legitimately lacks the feature and reports ALREADY when it has
           # been applied before, so this step is safe on any source tree.
-          for s in fix_sources fix_headless_stream fix_subagent_async fix_subagent_panel fix_panel_collapse fix_agent_introspection fix_host_filesystem fix_auto_continue fix_settings_extras fix_status_and_retry; do
+          for s in fix_sources fix_auto_continue fix_session_control fix_host_filesystem fix_settings_extras fix_status_and_retry; do
             if [ -f "$GITHUB_WORKSPACE/scripts/$s.py" ]; then
               echo "########## patch: $s ##########"
               python3 "$GITHUB_WORKSPACE/scripts/$s.py" "$PWD"

@@ -54,8 +54,9 @@ def patch(name, path, old, new, count, probe):
         return
     n = s.count(old)
     if n != count:
+
+        print(f"[FAIL   ] {name} (anchor x{n})", file=sys.stderr)
         failures.append(f"{name}: anchor matched {n}x, expected {count}")
-        print(f"[FAIL   ] {name} (anchor x{n})")
         return
     path.write_text(s.replace(old, new))
     applied += 1

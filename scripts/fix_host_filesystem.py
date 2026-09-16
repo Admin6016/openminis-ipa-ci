@@ -62,23 +62,36 @@ def edit(path, desc, old, new, count=1):
 # 1. Advertise the tool only when the capability is present.
 # ==========================================================================
 edit(DEFS, "register ios_fs behind the capability gate",
-     r"""        // [ci-fix-introspect] Live progress of parallel sub-agent runs.""",
+     # Anchor on the stable tail of makeAgentTools. (It must not depend on any
+     # other patch's output — an earlier revision anchored on a block another
+     # script inserts, which made the two patches order-dependent.)
+     r"""        return tools
+    }
+
+    /// Tools handed to a SUB-agent: everything the orchestrator has, minus
+    /// `spawn_agents` itself.""",
      r"""        // [ci-fix-hostfs] Real-iOS-filesystem tool. `makeHostFilesystemTool()`
         // returns nil unless this binary holds a filesystem-escaping
-        // entitlement, so the tool is simply ABSENT from the schema on any
-        // build without one — an App Store or ordinary-sideload install never
-        // sees it, and the model cannot call something it cannot see.
+        // entitlement, so the tool is simply ABSENT from the schema on any build
+        // without one — an App Store or ordinary-sideload install never sees it,
+        // and the model cannot call something it cannot see.
         if let hostFS = Self.makeHostFilesystemTool() {
             tools.append(hostFS)
         }
 
-        // [ci-fix-introspect] Live progress of parallel sub-agent runs.""")
+        return tools
+    }
+
+    /// Tools handed to a SUB-agent: everything the orchestrator has, minus
+    /// `spawn_agents` itself.""")
 
 # ==========================================================================
 # 2. Dispatch it.
 # ==========================================================================
 edit(DISPATCH, "dispatch ios_fs",
-     r"""        case "agent_status":""",
+     # Anchored on a branch that always exists rather than on another patch's
+     # output, so this script does not depend on patch ordering.
+     r"""        case "memory_write":""",
      r"""        case "ios_fs":
             // [ci-fix-hostfs] Reached only on builds that advertised the tool,
             // i.e. ones holding a filesystem-escaping entitlement — the runner
@@ -93,7 +106,7 @@ edit(DISPATCH, "dispatch ios_fs",
                 messages[msgIdx].blocks[blockIdx].content = toolOutput
             }
 
-        case "agent_status":""")
+        case "memory_write":""")
 
 # ==========================================================================
 # 3. (no framework linking needed)
