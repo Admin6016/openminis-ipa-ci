@@ -102,29 +102,40 @@ extension AIChatViewModel {
     /// Read this session's config out of UserDefaults. Called from the
     /// `sessionId` didSet so switching sessions swaps the mode along with
     /// everything else.
+    ///
+    /// Migrates a draft-scoped config onto the real session id: enabling the
+    /// mode BEFORE the first message is sent is the natural thing to do (there
+    /// is no session id yet), and without this the switch silently reverted to
+    /// off as soon as the session was created — which read as "I have to turn
+    /// it on twice".
     func loadAutoContinueConfig() {
         let key = Self.autoContinueDefaultsKey(for: sessionId)
+
         if let data = UserDefaults.standard.data(forKey: key),
            let cfg = try? JSONDecoder().decode(AutoContinueConfig.self, from: data) {
             autoContinueConfig = cfg
+        } else if let sid = sessionId, sid != Self.autoContinueDraftKey,
+                  let draftData = UserDefaults.standard.data(forKey: Self.autoContinueDefaultsKey(for: nil)),
+                  let draft = try? JSONDecoder().decode(AutoContinueConfig.self, from: draftData) {
+            // First load for a freshly-created session: adopt the draft config.
+            autoContinueConfig = draft
+            persistAutoContinueConfig()
+            UserDefaults.standard.removeObject(forKey: Self.autoContinueDefaultsKey(for: nil))
+            acLogger.info("[AutoContinue] migrated draft config to sid=\(sid.prefix(8)) enabled=\(draft.enabled)")
         } else {
             autoContinueConfig = .disabled
         }
+
         autoContinueFiredCount = 0
         disarmAutoContinue(reason: "session switched")
         acLogger.info("[AutoContinue] loaded sid=\(self.sessionId?.prefix(8) ?? "draft") enabled=\(autoContinueConfig.enabled)")
     }
 
-    /// Write the current config back. Also drops the draft-scoped copy once a
-    /// real session id exists, so a mode enabled before the first message
-    /// carries over instead of being stranded under the draft key.
+    /// Write the current config back.
     func persistAutoContinueConfig() {
         let key = Self.autoContinueDefaultsKey(for: sessionId)
         if let data = try? JSONEncoder().encode(autoContinueConfig) {
             UserDefaults.standard.set(data, forKey: key)
-        }
-        if let sid = sessionId, sid != Self.autoContinueDraftKey {
-            UserDefaults.standard.removeObject(forKey: Self.autoContinueDefaultsKey(for: nil))
         }
     }
 
