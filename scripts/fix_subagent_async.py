@@ -354,6 +354,7 @@ extension AIChatViewModel {
 }
 '''
 
+# ==========================================================================
 srcs[CT] = srcs[CT].rstrip("\n") + HELPER
 edits.append("completeSubAgentRun: inject summary + persist + restart loop if idle")
 

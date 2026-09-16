@@ -305,6 +305,77 @@ edit(LIST, "dispatch the panel cell",
                 case .assistantPanel:
                     return cv.dequeueConfiguredReusableCell(using: panelReg, for: indexPath, item: item)""")
 
+# --- every other exhaustive switch over MessageListItem -------------------
+edit(LIST, "messageId(of:): cover the panel case",
+     r"""            case .assistantHeader(let id): return id
+            case .assistantFooter(let id): return id
+            case .assistantBlock(let mid, _): return mid
+            }
+        }""",
+     r"""            case .assistantHeader(let id): return id
+            case .assistantFooter(let id): return id
+            case .assistantPanel(let id): return id
+            case .assistantBlock(let mid, _): return mid
+            }
+        }""")
+
+edit(LIST, "contentKey (DEBUG): cover the panel case",
+     "            case .assistantFooter(let id):\n"
+     "                let c = msg(id)?.blocks.first?.content ?? \"\"\n"
+     "                return \"f#\\(digest(c))\"",
+     "            case .assistantFooter(let id):\n"
+     "                let c = msg(id)?.blocks.first?.content ?? \"\"\n"
+     "                return \"f#\\(digest(c))\"\n"
+     "            case .assistantPanel(let id):\n"
+     "                // A fan-out card grows as agents report progress, so fold\n"
+     "                // the completion count in to force a re-measure as it moves.\n"
+     "                let done = msg(id)?.subAgentRunId\n"
+     "                    .flatMap { SubAgentRunStore.shared.run(for: $0)?.doneCount } ?? 0\n"
+     "                return \"p#\" + digest(\"\\(done)\")\n")
+
+edit(LIST, "contentKey: cover the panel case",
+     "            case .assistantFooter(let id):\n"
+     "                return \"f:\\(id.uuidString)\"",
+     "            case .assistantFooter(let id):\n"
+     "                return \"f:\\(id.uuidString)\"\n"
+     "            case .assistantPanel(let id):\n"
+     "                // Include the progress counter so the memo invalidates as the\n"
+     "                // fan-out advances instead of freezing at the first height.\n"
+     "                let done = msg(id)?.subAgentRunId\n"
+     "                    .flatMap { SubAgentRunStore.shared.run(for: $0)?.doneCount } ?? 0\n"
+     "                return \"p:\" + id.uuidString + \":\" + String(done)\n")
+
+edit(LIST, "belongsTo: cover the panel case",
+     r"""            case .assistantBlock(let mid, _): return mid == messageId
+            case .assistantFooter(let mid): return mid == messageId
+            case .wholeMessage, .assistantHeader: return false""",
+     r"""            case .assistantBlock(let mid, _): return mid == messageId
+            case .assistantFooter(let mid): return mid == messageId
+            case .assistantPanel(let mid): return mid == messageId
+            case .wholeMessage, .assistantHeader: return false""")
+
+edit(LIST, "seed-loop estimated height: cover the panel case",
+     r"""                    case .assistantFooter:
+                        // Prominent banners (error/resume/typing) measure
+                        // ~44-56pt; the quiet meta footer is ~0-4pt. Seeding
+                        // closer to the real height keeps the first-display
+                        // correction (and its scroll shift) small.""",
+     r"""                    case .assistantPanel:
+                        // [ci-fix-panel] Seed only; the real measure wins once
+                        // the card mounts. Header (~40pt) + one row per agent.
+                        let agentCount = messages
+                            .compactMap { $0.subAgentRunId }
+                            .compactMap { SubAgentRunStore.shared.run(for: $0) }
+                            .map(\.entries.count)
+                            .max() ?? 1
+                        layout.setEstimatedHeight(CGFloat(40 + 44 * max(1, agentCount)), at: i)
+
+                    case .assistantFooter:
+                        // Prominent banners (error/resume/typing) measure
+                        // ~44-56pt; the quiet meta footer is ~0-4pt. Seeding
+                        // closer to the real height keeps the first-display
+                        // correction (and its scroll shift) small.""")
+
 edit(LIST, "estimateItemHeight: cover the new case (switch is exhaustive)",
      r"""            case .assistantFooter:
                 return 4
@@ -321,7 +392,7 @@ edit(LIST, "estimateItemHeight: cover the new case (switch is exhaustive)",
                     .compactMap { SubAgentRunStore.shared.run(for: $0) }
                     .map(\.entries.count)
                     .max() ?? 1
-                return 40 + 44 * max(1, n)
+                return CGFloat(40 + 44 * max(1, n))
             }
         }""")
 

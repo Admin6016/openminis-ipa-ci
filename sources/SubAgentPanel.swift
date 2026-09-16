@@ -181,6 +181,13 @@ private struct SubAgentEntryRow: View {
         }
     }
 
+    /// `.running` carries an associated `currentTool`, so it cannot be compared
+    /// with `==`; match the case instead.
+    private var isRunning: Bool {
+        if case .running = entry.state { return true }
+        return false
+    }
+
     private var hasDetail: Bool {
         !entry.finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -192,7 +199,7 @@ private struct SubAgentEntryRow: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(statusTint)
                     .frame(width: 18)
-                    .modifier(PulseWhenActive(active: entry.state == .running))
+                    .modifier(PulseWhenActive(active: isRunning))
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
