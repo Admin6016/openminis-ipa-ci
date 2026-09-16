@@ -75,7 +75,11 @@ if not AC.exists():
     print("[SKIP   ] AutoContinue.swift not installed — global default prompt not wired")
 else:
     edit(AC, "AutoContinueConfig: read the global default prompt",
-         "    static let defaultPrompt =",
+         # The original spans TWO lines (declaration + its string literal on the
+         # next line), so the anchor must include both — anchoring on the bare
+         # declaration leaves the literal orphaned and the file will not parse.
+         '    static let defaultPrompt =\n'
+         '        "继续。不要停下来问我，也不要总结进度——直接接着上一步做下去，直到目标完整达成。"',
          "    /// [ci-fix-settings] The BUILT-IN fallback, used only when the user has\n"
          "    /// never set a global default. Prefer `resolvedDefaultPrompt`, which reads\n"
          "    /// the user's setting first.\n"
