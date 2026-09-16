@@ -156,10 +156,16 @@ extension AIChatViewModel {
 
     /// Called from the `canResume` didSet — the single chokepoint covering
     /// every interruption path in the app.
+    ///
+    /// NOTE on ordering: every `canResume = true` site runs INSIDE
+    /// `runAgentLoop`, i.e. while `isProcessing` is still true; the flag only
+    /// flips to false later, in the task epilogue. So a `guard !isProcessing`
+    /// here would never pass and the mode would never arm — which is exactly
+    /// the bug the first version shipped. Instead, record the intent and let
+    /// `armAutoContinue` retry until the loop has actually unwound.
     func autoContinueOnCanResumeChanged(_ nowCanResume: Bool) {
         guard autoContinueConfig.enabled else { return }
         if nowCanResume {
-            guard !isProcessing else { return }   // a new turn already started
             armAutoContinue()
         } else {
             // canResume cleared: either the continuation began or the user
@@ -168,22 +174,54 @@ extension AIChatViewModel {
         }
     }
 
+    /// Called from the `isProcessing` didSet when a turn ends. Pairs with
+    /// `autoContinueOnCanResumeChanged`: the interruption sets `canResume`
+    /// while the loop is still running, and the loop only goes idle here.
+    func autoContinueOnProcessingChanged(_ processing: Bool) {
+        guard !processing else { return }
+        guard autoContinueConfig.enabled else { return }
+        guard canResume else { return }
+        armAutoContinue()
+    }
+
     // MARK: Countdown
 
     /// Start (or restart) the countdown that leads to an automatic continue.
+    ///
+    /// Tolerates being called while the loop is still unwinding: rather than
+    /// bailing out (which is what made the first version a no-op), it waits
+    /// for `isProcessing` to clear, then proceeds. The wait is bounded so a
+    /// stuck loop can't leave a task parked forever.
     func armAutoContinue() {
         guard autoContinueConfig.enabled else { return }
-        guard canResume, !isProcessing else { return }
+        guard canResume else { return }
         guard autoContinueCountdownTask == nil else { return }  // already armed
 
         let total = Self.autoContinueDelaySeconds
         autoContinueCountdownStorage = total
 
-        acLogger.info("[AutoContinue] countdown=\(total)s sid=\(self.sessionId?.prefix(8) ?? "draft")")
+        acLogger.info("[AutoContinue] countdown=\(total)s sid=\(self.sessionId?.prefix(8) ?? "draft") processing=\(self.isProcessing)")
 
         autoContinueCountdownTask = Task { @MainActor [weak self] in
+            // Phase 0 — wait for the in-flight loop to finish unwinding. Every
+            // canResume=true site fires while isProcessing is still true, so
+            // this phase is the normal path, not an edge case.
+            var waited: Double = 0
+            while let self, self.isProcessing, waited < Self.autoContinueMaxWaitSeconds {
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                waited += 0.2
+            }
+            guard let self else { return }
+            guard !self.isProcessing else {
+                acLogger.info("[AutoContinue] gave up waiting for idle after \(Int(waited))s")
+                self.autoContinueCountdownStorage = 0
+                self.autoContinueCountdownTask = nil
+                return
+            }
+
+            // Phase 1 — visible countdown, so the user can Stop it.
             for remaining in stride(from: total, through: 1, by: -1) {
-                guard let self else { return }
                 self.autoContinueCountdownStorage = remaining
                 do {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -192,12 +230,16 @@ extension AIChatViewModel {
                 }
                 if Task.isCancelled { return }
             }
-            guard let self else { return }
             self.autoContinueCountdownStorage = 0
             self.autoContinueCountdownTask = nil
             self.fireAutoContinue()
         }
     }
+
+    /// Upper bound on how long `armAutoContinue` waits for the loop to unwind
+    /// before giving up. The loop's own epilogue is immediate; this only
+    /// matters if it is wedged.
+    static let autoContinueMaxWaitSeconds: Double = 60
 
     /// Cancel the pending countdown. Safe to call when nothing is armed.
     func disarmAutoContinue(reason: String) {
@@ -218,15 +260,14 @@ extension AIChatViewModel {
             acLogger.info("[AutoContinue] fire skipped — disabled during countdown")
             return
         }
-        guard canResume, !isProcessing else {
-            acLogger.info("[AutoContinue] fire skipped — canResume=\(self.canResume) isProcessing=\(self.isProcessing)")
+        guard canResume else {
+            acLogger.info("[AutoContinue] fire skipped — canResume=false (already resumed?)")
             return
         }
-        guard currentTask == nil || currentTask?.isCancelled == true else {
-            acLogger.info("[AutoContinue] fire skipped — a task is still running")
+        guard !isProcessing else {
+            acLogger.info("[AutoContinue] fire skipped — isProcessing=true")
             return
         }
-
         acLogger.info("[AutoContinue] FIRING sid=\(self.sessionId?.prefix(8) ?? "draft")")
         autoContinueFiredCount += 1
         // Pass the user's own preset sentence rather than the generic

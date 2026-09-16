@@ -70,6 +70,23 @@ patch('VM: canResume didSet hook', VM,
 '    var isRedetectingInterruptedTail = false\n\n    @Published var canResume = false {\n        didSet {',
 '    var isRedetectingInterruptedTail = false\n\n    @Published var canResume = false {\n        didSet {\n            // [T-auto-continue] Single chokepoint for every "the session\n            // stopped and is waiting for the user" transition.\n            if oldValue != canResume {\n                autoContinueOnCanResumeChanged(canResume)\n            }', 1, 'autoContinueOnCanResumeChanged(canResume)')
 
+# The interruption sites set canResume INSIDE the loop, while isProcessing is
+# still true; the loop only idles later. So the countdown must also be armed
+# from the isProcessing falling edge, not just from canResume.
+patch('VM: isProcessing falling-edge hook', VM,
+    '            if isProcessing && !oldValue {\n                // Agent loop starting',
+    '\n'.join([
+        '            // [T-auto-continue] The interruption flags (canResume) are set',
+        '            // INSIDE the loop, while isProcessing is still true. This falling',
+        '            // edge is where the session actually goes idle, so it is the other',
+        '            // half of the arming condition.',
+        '            if !isProcessing && oldValue {',
+        '                autoContinueOnProcessingChanged(false)',
+        '            }',
+        '            if isProcessing && !oldValue {',
+        '                // Agent loop starting',
+    ]), 1, 'autoContinueOnProcessingChanged(false)')
+
 patch('VM: sessionId didSet hook', VM,
 '    var sessionId: String? {\n        didSet { browserTabPool.sessionId = sessionId }\n    }',
 '    var sessionId: String? {\n        didSet {\n            browserTabPool.sessionId = sessionId\n            // [T-auto-continue] The mode is per-session; swap it in when the\n            // bound session changes (different chat, or a new draft).\n            if oldValue != sessionId {\n                loadAutoContinueConfig()\n            }\n        }\n    }', 1, 'loadAutoContinueConfig()')
