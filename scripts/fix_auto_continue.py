@@ -118,6 +118,18 @@ patch('View: SwiftUI menu row', AV,
 '                Label(AppLocalized("Speak Responses"), systemImage: "speaker.wave.2")\n            }\n\n            // [T-codex-fast-mode-menu-group]',
 '                Label(AppLocalized("Speak Responses"), systemImage: "speaker.wave.2")\n            }\n\n            // [T-auto-continue] Mirrors the UIKit buildMenu — its own group,\n            // since it changes how the agent is driven rather than what it can\n            // reach. Tapping opens the editor (message + on/off).\n            Divider()\n\n            Button { onAutoContinue() } label: {\n                Label(\n                    autoContinueEnabled\n                        ? AppLocalized("Keep Going — On")\n                        : AppLocalized("Keep Going"),\n                    systemImage: autoContinueEnabled ? "infinity.circle.fill" : "infinity")\n            }\n\n            // [T-codex-fast-mode-menu-group]', 1, 'Keep Going — On')
 
+# The UIKit struct's declaration is distinguished from the SwiftUI mirror by
+# the Codex doc-comment that precedes its own showFastModeToggle.
+patch('View: UIKit struct property', AV,
+    '    /// Codex OAuth instance (OpenAI OAuth, no custom base).\n    let showFastModeToggle: Bool\n    let fastModeEnabled: Bool\n\n    let onNewChat: () -> Void',
+'''    /// Codex OAuth instance (OpenAI OAuth, no custom base).
+    let showFastModeToggle: Bool
+    let fastModeEnabled: Bool
+    /// [T-auto-continue] Mirrors the persisted per-session flag.
+    let autoContinueEnabled: Bool
+
+    let onNewChat: () -> Void''', 1, 'no custom base).\n    let showFastModeToggle: Bool\n    let fastModeEnabled: Bool\n    /// [T-auto-continue]')
+
 patch('View: UIKit Key field', AV,
 '        let showFastModeToggle: Bool\n        let fastModeEnabled: Bool\n    }',
 '        let showFastModeToggle: Bool\n        let fastModeEnabled: Bool\n        /// [T-auto-continue] Menu shows a checkmark when the mode is armed.\n        let autoContinueEnabled: Bool\n    }', 1, 'Menu shows a checkmark when the mode is armed')
