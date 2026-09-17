@@ -318,7 +318,16 @@ extension AIChatViewModel {
                 )
             }.value
             let rendered = Self.renderBridgeResult(res, action: "send", emptyText: "Message sent.")
-            return target == nil ? "Started a new session with that message.\n" + rendered : rendered
+            // [T-send-when-busy] Say plainly which of the two happened. A queued
+            // message has NOT been acted on yet, and a caller that assumes
+            // otherwise will misreport progress — or worse, resend.
+            let queued = (res["queued"] as? Bool) ?? false
+            let lead = queued
+                ? "Queued: that session is mid-turn, so the message will be injected when the current run finishes."
+                : "Sent."
+            return target == nil
+                ? "Started a new session with that message.\n" + rendered
+                : lead + "\n" + rendered
 
         case "retry":
             guard let id = sid, !id.isEmpty else { return "Error: 'session_id' is required for retry." }
