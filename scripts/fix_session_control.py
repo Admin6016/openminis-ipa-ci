@@ -145,14 +145,38 @@ edit(DEFS, "register the session_control tool",
 # ==========================================================================
 defs_src = DEFS.read_text()
 _rs = defs_src.find("        // [T-parallel-subagents] Fan-out tool.")
-_re = defs_src.find("        return tools", _rs)
-if _rs < 0 or _re < 0:
+if _rs < 0:
     sys.exit("FATAL: could not locate the spawn_agents registration block")
-_removed = defs_src[_re:] and defs_src[_rs:_re]
-if "spawn_agents" not in _removed:
+# Delete ONLY this one append. An earlier revision deleted from the comment to
+# the next `return tools`, which also swallowed every tool another patch had
+# inserted in between (ios_fs, session_control) — the tools silently vanished
+# from the schema and the build still succeeded. Bound the removal by the
+# block's own closing brace instead of by a landmark further away.
+_marker = "        if parallelAgentsEnabled {"
+_bs = defs_src.find(_marker, _rs)
+if _bs < 0:
+    sys.exit("FATAL: could not find the parallelAgentsEnabled guard")
+# Walk braces from the guard's opening brace to its matching close.
+_brace = defs_src.find("{", _bs)
+_depth = 0
+_i = _brace
+while _i < len(defs_src):
+    if defs_src[_i] == "{":
+        _depth += 1
+    elif defs_src[_i] == "}":
+        _depth -= 1
+        if _depth == 0:
+            break
+    _i += 1
+if _depth != 0:
+    sys.exit("FATAL: unbalanced braces in the spawn_agents registration block")
+# Extend to the end of that line so the trailing newline goes too.
+_re_end = defs_src.find("\n", _i) + 1
+if "spawn_agents" not in defs_src[_rs:_re_end]:
     sys.exit("FATAL: located block does not contain the registration")
-DEFS.write_text(defs_src[:_rs] + defs_src[_re:])
-print("[APPLY  ] deleted the spawn_agents registration block (unconditional)")
+DEFS.write_text(defs_src[:_rs] + defs_src[_re_end:])
+print("[APPLY  ] deleted ONLY the spawn_agents registration block (brace-matched)")
+edits.append("spawn_agents registration deleted")
 edits.append("spawn_agents registration deleted")
 
 # ==========================================================================
