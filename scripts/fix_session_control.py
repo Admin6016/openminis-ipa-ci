@@ -70,6 +70,11 @@ def edit(path, desc, old, new, count=1):
 # ==========================================================================
 # 1. Multi-agent off, using its own existing switch.
 # ==========================================================================
+# NOTE: an earlier revision merely flipped this flag to false. That left the
+# registration one boolean away from coming back, and made "is the tool gone?"
+# depend on a runtime value rather than on the shape of the code. The
+# registration block is deleted below instead, so the tool cannot appear no
+# matter what the flag says.
 edit(VM, "parallelAgentsEnabled: off by default",
      r"""    @Published var parallelAgentsEnabled = true""",
      r"""    /// [T-retire-multiagent] OFF. `spawn_agents` is registered only when this is
@@ -128,6 +133,27 @@ NEW_TOOL = r'''        // [T-retire-multiagent] Session control: inspect AND dri
 
 edit(DEFS, "register the session_control tool",
      ANCHOR, NEW_TOOL + ANCHOR)
+
+# ==========================================================================
+# 2b. Delete the spawn_agents registration outright.
+#
+# Flipping `parallelAgentsEnabled` to false was not enough in practice: the
+# tool still appeared at runtime, and because a disabled flag is invisible in
+# the built binary there was no way to tell from the artifact whether the gate
+# had taken. Deleting the registration makes the answer structural — the tool
+# is absent because the code that adds it is gone.
+# ==========================================================================
+defs_src = DEFS.read_text()
+_rs = defs_src.find("        // [T-parallel-subagents] Fan-out tool.")
+_re = defs_src.find("        return tools", _rs)
+if _rs < 0 or _re < 0:
+    sys.exit("FATAL: could not locate the spawn_agents registration block")
+_removed = defs_src[_re:] and defs_src[_rs:_re]
+if "spawn_agents" not in _removed:
+    sys.exit("FATAL: located block does not contain the registration")
+DEFS.write_text(defs_src[:_rs] + defs_src[_re:])
+print("[APPLY  ] deleted the spawn_agents registration block (unconditional)")
+edits.append("spawn_agents registration deleted")
 
 # ==========================================================================
 # 3. Dispatch it.
@@ -219,7 +245,10 @@ extension AIChatViewModel {
             var out = ["\(metas.count) session\(metas.count == 1 ? "" : "s") (newest first):"]
             for m in metas {
                 var bits = ["- \(m.title ?? "(untitled)")"]
-                bits.append("id=\(m.id.prefix(8))")
+                // FULL id, never a prefix: the bridge resolves sessions by exact
+                // id, so a truncated one is unusable — you would read the list,
+                // pass the id back to `status`, and get session_not_found.
+                bits.append("id=\(m.id)")
                 bits.append("last=\(fmt.string(from: m.lastActive))")
                 bits.append("messages=\(m.messageCount)")
                 if let p = m.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
